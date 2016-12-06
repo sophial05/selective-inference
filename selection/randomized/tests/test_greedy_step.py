@@ -43,7 +43,7 @@ def test_overall_null_two_queries(ndraw=10000, burnin=2000, nsim=None): # nsim n
 
     lam = lam_frac * np.mean(np.fabs(np.dot(X.T, np.random.binomial(1, 1. / 2, (n, 10000)))).max(0))
     W = np.ones(p)*lam
-    W += np.arange(p) / 200
+    W += np.arange(p) / 20.
     W[0] = 0 # use at least some unpenalized
     penalty = rr.group_lasso(np.arange(p),
                              weights=dict(zip(np.arange(p), W)), lagrange=1.)

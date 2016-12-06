@@ -13,7 +13,8 @@ class greedy_score_step(query):
                  inactive_groups, 
                  randomization, 
                  solve_args={'min_its':50, 'tol':1.e-10},
-                 beta_active=None):
+                 beta_active=None,
+                 K=1):
         """
         penalty is a group_lasso object that assigns weights to groups
         """
@@ -34,6 +35,8 @@ class greedy_score_step(query):
                               solve_args,
                               beta_active)
          
+        self.K = K # how many winners each step
+
         self.active = np.zeros(self.loss.shape, np.bool)
         for i, g in enumerate(np.unique(self.penalty.groups)):
             if self.active_groups[i]:
@@ -83,36 +86,46 @@ class greedy_score_step(query):
 
         # assuming a.s. unique maximizing group here
 
-        maximizing_group = np.unique(self.group_lasso_dual.groups)[np.argmax(terms)]
-        maximizing_subgrad = randomized_score[self.group_lasso_dual.groups == maximizing_group]
-        maximizing_subgrad /= np.linalg.norm(maximizing_subgrad) # this is now a unit vector
-        maximizing_subgrad *= self.group_lasso_dual.weights[maximizing_group] # now a vector of length given by weight of maximizing group
-        self.maximizing_subgrad = np.zeros(inactive.sum())
-        self.maximizing_subgrad[self.group_lasso_dual.groups == maximizing_group] = maximizing_subgrad
-        self.observed_scaling = randomized_score[np.argmax(terms)] / np.linalg.norm(maximizing_subgrad)**2
+        order = np.argsort(terms)[::-1]
+        winners = order[:self.K]
+        winning_groups = [self._group_dict[i] for i in winners]
+        maximizing_groups = [g for g in groups if self._group_dict[g] in winning_groups]
+        maximizing_subgrads = dict(zip(maximizing_groups,
+                                       [randomized_score[g] for g in maximizing_groups]))
+        observed_scalings = {}
+        for g in maximizing_subgrads.keys():
+            _group = self.group_lasso_dual.groups == g
+            maximizing_subgrads[g] /= np.linalg.norm(maximizing_subgrads[g]) # this is now a unit vector
+            maximizing_subgrads[g] *= self.group_lasso_dual.weights[g] # now a vector of length given by weight of maximizing group
+            observed_scalings[g] = randomized_score[_group].dot(maximizing_subgrads[g]) / np.linalg.norm(maximizing_subgrads[g])**2
+        self.observed_scaling = np.array([observed_scalings[g] for g in winning_groups])
 
+        self.maximizing_subgrad = []
+        for g in maximizing_subgrads.keys():
+            _subgrad = np.zeros(inactive.sum())
+            _subgrad[self.group_lasso_dual.groups == g] = maximizing_subgrads[g]
+            self.maximizing_subgrad[g] = _subgrad
+        self._offset_vectors = [self.maximizing_subgrad[g] for g in winning_groups]
         # which groups did not win
 
-        losing_groups = [g for g in np.unique(self.group_lasso_dual.groups) if g != maximizing_group]
+        losing_groups = [g for g in np.unique(self.group_lasso_dual.groups) if g not in winning_groups]
         losing_set = np.zeros_like(self.maximizing_subgrad, np.bool)
         for g in losing_groups:
             losing_set += self.group_lasso_dual.groups == g
 
         # (inactive_subgradients, scaling) are in this epigraph:
-        losing_weights = dict([(g, self.group_lasso_dual.weights[g]) for g in self.group_lasso_dual.weights.keys() if g in losing_groups])
-        self.group_lasso_dual_epigraph = rr.group_lasso_dual_epigraph(self.group_lasso_dual.groups[losing_set], weights=losing_weights)
         
         self.observed_subgradients = -randomized_score[losing_set]
         self.losing_padding_map = np.identity(losing_set.shape[0])[:,losing_set]
 
         # which variables are added to the model
 
-        winning_variables = self.group_lasso_dual.groups == maximizing_group
+        winning_set = ~losing_set
         padding_map = np.identity(self.active.shape[0])[:,self.inactive]
-        self.maximizing_variables = padding_map.dot(winning_variables) > 0
+        self.maximizing_variables = padding_map.dot(winning_set) > 0
         
-        self.selection_variable = {'maximizing_group':maximizing_group, 
-                                   'maximizing_direction':self.maximizing_subgrad,
+        self.selection_variable = {'maximizing_groups':maximizing_groups, 
+                                   'maximizing_directions':self.maximizing_subgrads,
                                    'variables':self.maximizing_variables}
 
         # need to implement Jacobian
@@ -120,12 +133,13 @@ class greedy_score_step(query):
     def setup_sampler(self):
 
         self.observed_opt_state = np.hstack([self.observed_subgradients,
-                                             self.observed_scaling])
+                                             self.observed_scalings])
 
         p = self.inactive.sum() # shorthand
-        _opt_linear_term = np.zeros((p, 1 + self.observed_subgradients.shape[0]))
+        _opt_linear_term = np.zeros((p, self.K + self.observed_subgradients.shape[0]))
         _opt_linear_term[:,:self.observed_subgradients.shape[0]] = self.losing_padding_map
-        _opt_linear_term[:,-1] = self.maximizing_subgrad
+        for k in range(self.K):
+            _opt_linear_term[:,self.observed_subgradients.shape[0]+k] = self._offset_vectors[k]
 
         _score_linear_term = np.identity(p)
 
