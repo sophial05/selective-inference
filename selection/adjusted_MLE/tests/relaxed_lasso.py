@@ -1,17 +1,20 @@
 from __future__ import print_function, division
+from scipy.stats import norm as ndist
+import numpy as np, sys
+
+import regreg.api as rr
+import statsmodels.api as sm
+
+# rpy2 imports
+
 from rpy2.robjects.packages import importr
 from rpy2 import robjects
-
 import rpy2.robjects.numpy2ri
 rpy2.robjects.numpy2ri.activate()
 
-import statsmodels.api as sm
-import numpy as np, sys
-import regreg.api as rr
 from selection.randomized.api import randomization
-from selection.adjusted_MLE.selective_MLE import M_estimator_map, solve_UMVU
-from scipy.stats import norm as ndist
-from selection.algorithms.debiased_lasso import _find_row_approx_inverse
+from selection.randomized.selective_MLE import selective_MLE as solve_selective_MLE
+from selection.adjusted_MLE.selective_MLE import M_estimator_map
 
 def glmnet_sigma(X, y):
     robjects.r('''
@@ -117,19 +120,21 @@ def inference_approx(n=500, p=100, nval=100, rho=0.35, s=5, beta_type=2, snr=0.2
         X_val /= (X_val.std(0)[None, :] * np.sqrt(nval))
 
         if p > n:
-            sigma_est = np.std(y) / 2.
-            #sigma_est = sigma
+            sigma_est = np.std(y)
             print("sigma and sigma_est", sigma, sigma_est)
         else:
             ols_fit = sm.OLS(y, X).fit()
             sigma_est = np.linalg.norm(ols_fit.resid) / np.sqrt(n - p - 1.)
             print("sigma and sigma_est", sigma, sigma_est)
 
+<<<<<<< HEAD
         y = y - y.mean()
         y_val = y_val - y_val.mean()
         loss = rr.glm.gaussian(X, y)
         epsilon = 1. / np.sqrt(n)
 
+=======
+>>>>>>> master
         if target == "debiased":
             M = np.linalg.inv(Sigma)
         else:
@@ -141,8 +146,14 @@ def inference_approx(n=500, p=100, nval=100, rho=0.35, s=5, beta_type=2, snr=0.2
         y_val /= sigma_est
         true_mean /= sigma_est
 
+<<<<<<< HEAD
         lam_seq = np.linspace(0.75, 2.75, num= 100)\
                   * np.mean(np.fabs(np.dot(X.T, np.random.standard_normal((n, 2000)))).max(0)) * sigma_est
+=======
+        loss = rr.glm.gaussian(X, y)
+        epsilon = 1. / np.sqrt(n)
+        lam_seq = np.linspace(0.75, 2.75, num=100) * np.mean(np.fabs(np.dot(X.T, np.random.standard_normal((n, 2000)))).max(0))
+>>>>>>> master
 
         err = np.zeros(100)
         randomizer = randomization.isotropic_gaussian((p,), scale=randomization_scale)
@@ -157,12 +168,12 @@ def inference_approx(n=500, p=100, nval=100, rho=0.35, s=5, beta_type=2, snr=0.2
             approx_MLE_est = np.zeros(p)
             if nactive>0:
                 M_est.solve_map()
-                approx_MLE = solve_UMVU(M_est.target_transform,
-                                        M_est.opt_transform,
-                                        M_est.target_observed,
-                                        M_est.feasible_point,
-                                        M_est.target_cov,
-                                        M_est.randomizer_precision)[0]
+                approx_MLE = solve_selective_MLE(M_est.target_observed,
+                                                 M_est.target_cov,
+                                                 M_est.target_transform,
+                                                 M_est.opt_transform,
+                                                 M_est.feasible_point,
+                                                 M_est.randomizer_precision)[0]
                 approx_MLE_est[active] = approx_MLE
 
             err[k] = np.mean((y_val - X_val.dot(approx_MLE_est)) ** 2.)
@@ -219,6 +230,7 @@ def inference_approx(n=500, p=100, nval=100, rho=0.35, s=5, beta_type=2, snr=0.2
         coverage_sel = 0.
         coverage_rand = 0.
         coverage_nonrand = 0.
+
         power_sel = 0.
         power_rand = 0.
         power_nonrand = 0.
@@ -233,31 +245,15 @@ def inference_approx(n=500, p=100, nval=100, rho=0.35, s=5, beta_type=2, snr=0.2
 
         if nactive > 0:
             M_est.solve_map()
-            approx_MLE, var, mle_map, _, _, mle_transform = solve_UMVU(M_est.target_transform,
-                                                                       M_est.opt_transform,
-                                                                       M_est.target_observed,
-                                                                       M_est.feasible_point,
-                                                                       M_est.target_cov,
-                                                                       M_est.randomizer_precision)
+            approx_MLE, var, mle_map, _, _, mle_transform = solve_selective_MLE(M_est.target_observed,
+                                                                                M_est.target_cov,
+                                                                                M_est.target_transform,
+                                                                                M_est.opt_transform,
+                                                                                M_est.feasible_point,
+                                                                                M_est.randomizer_precision)
 
             mle_target_lin, mle_soln_lin, mle_offset = mle_transform
             approx_sd = np.sqrt(np.diag(var))
-
-            if p>n:
-                B = 1000
-                boot_pivot = np.zeros((B, nactive))
-                resid = y - X[:, active].dot(M_est.target_observed)
-                for b in range(B):
-                    boot_indices = np.random.choice(n, n, replace=True)
-                    boot_vector = (X[boot_indices, :][:, active]).T.dot(resid[boot_indices])
-                    #target_boot = (np.linalg.inv(X.T.dot(X)).dot(X[boot_indices, :].T))[active].dot(resid[boot_indices]) + M_est.target_observed
-                    target_boot = np.linalg.inv(X[:, active].T.dot(X[:, active])).dot(boot_vector) + M_est.target_observed
-                    #print("check", target_boot, M_est.target_observed)
-                    boot_mle = mle_map(target_boot)
-                    #print("target_boot", boot_mle[0], approx_MLE)
-                    boot_pivot[b, :] = np.true_divide(boot_mle[0] - approx_MLE, np.sqrt(np.diag(boot_mle[1])))
-
-                boot_sd = boot_pivot.std(0)
 
             if nactive == 1:
                 approx_MLE = np.array([approx_MLE])
@@ -267,17 +263,20 @@ def inference_approx(n=500, p=100, nval=100, rho=0.35, s=5, beta_type=2, snr=0.2
                 if (approx_MLE[j] - (1.65 * approx_sd[j])) <= true_target[j] and \
                                 (approx_MLE[j] + (1.65 * approx_sd[j])) >= true_target[j]:
                     coverage_sel += 1
-                print("selective intervals",(approx_MLE[j] - (1.65 * approx_sd[j])), (approx_MLE[j] + (1.65 * approx_sd[j])))
-                if p>n:
-                    print("boot intervals", (approx_MLE[j] - (1.65 * boot_sd[j])), (approx_MLE[j] + (1.65 * boot_sd[j])))
+                print("selective intervals",sigma_est* (approx_MLE[j] - (1.65 * approx_sd[j])),
+                      sigma_est* (approx_MLE[j] + (1.65 * approx_sd[j])))
+
                 if active_bool[j] == True and (
                                 (approx_MLE[j] - (1.65 * approx_sd[j])) > 0. or (
                             approx_MLE[j] + (1.65 * approx_sd[j])) < 0.):
                     power_sel += 1
+
                 if (M_est.target_observed[j] - (1.65 * unad_sd[j])) <= true_target[j] and (
                             M_est.target_observed[j] + (1.65 * unad_sd[j])) >= true_target[j]:
                     coverage_rand += 1
-                print("randomized intervals", (M_est.target_observed[j] - (1.65 * unad_sd[j])),(M_est.target_observed[j] + (1.65 * unad_sd[j])))
+                print("randomized intervals", sigma_est* (M_est.target_observed[j] - (1.65 * unad_sd[j])),
+                      sigma_est* (M_est.target_observed[j] + (1.65 * unad_sd[j])))
+
                 if active_bool[j] == True and ((M_est.target_observed[j] - (1.65 * unad_sd[j])) > 0. or (
                             M_est.target_observed[j] + (1.65 * unad_sd[j])) < 0.):
                     power_rand += 1
@@ -301,8 +300,6 @@ def inference_approx(n=500, p=100, nval=100, rho=0.35, s=5, beta_type=2, snr=0.2
     partial_Lasso_est = M_est.observed_opt_state[:nactive]
 
     selective_MLE = np.zeros(p)
-
-    selective_MLE[active] = approx_MLE / np.sqrt(n)
 
     selective_MLE[active] = approx_MLE / (np.sqrt(n)*(1./sigma_est))
     partial_selective_MLE = approx_MLE
@@ -388,32 +385,6 @@ if __name__ == "__main__":
             power_rand += approx[15]
             power_nonrand += approx[16]
 
-            count += 1
-
-            sys.stderr.write("overall_bias" + str(bias / count) + "\n")
-            sys.stderr.write("overall_selrisk" + str(risk_selMLE / count) + "\n")
-            sys.stderr.write("overall_relLASSOrisk" + str(risk_relLASSO / count) + "\n")
-            sys.stderr.write("overall_indepestrisk" + str(risk_indest / count) + "\n")
-            sys.stderr.write("overall_LASSOrisk" + str(risk_LASSO / count) + "\n")
-            sys.stderr.write("overall_relLASSOrisk_norand" + str(risk_relLASSO_nonrand / count) + "\n")
-            sys.stderr.write("overall_LASSOrisk_norand" + str(risk_LASSO_nonrand / count) + "\n")
-
-            sys.stderr.write("overall_LASSO_rand_spower" + str(spower_rand / count) + "\n")
-            sys.stderr.write("overall_LASSO_norand_spower" + str(spower_nonrand / count) + "\n")
-            sys.stderr.write("overall_LASSO_rand_falsepositives" + str(false_positive_randomized / count) + "\n")
-            sys.stderr.write("overall_LASSO_norand_falsepositives" + str(false_positive_nonrandomized / count) + "\n")
-
-            sys.stderr.write("selective coverage" + str(coverage_sel / count) + "\n")
-            sys.stderr.write("randomized coverage" + str(coverage_rand / count) + "\n")
-            sys.stderr.write("nonrandomized coverage" + str(coverage_nonrand / count) + "\n")
-
-            sys.stderr.write("selective power" + str(power_sel / count) + "\n")
-            sys.stderr.write("randomized power" + str(power_rand / count) + "\n")
-            sys.stderr.write("nonrandomized power" + str(power_nonrand / count) + "\n")
-
-            sys.stderr.write("iteration completed, count" + str((i + 1, count)) + "\n")
-=======
-
             partial_risk_selMLE += approx[17]
             partial_risk_relLASSO += approx[18]
             partial_risk_indest += approx[19]
@@ -448,9 +419,6 @@ if __name__ == "__main__":
         # sys.stderr.write("overall_partial_LASSOrisk" + str(partial_risk_LASSO / float(i + 1)) + "\n")
         # sys.stderr.write("overall_partial_relLASSOrisk_norand" + str(partial_risk_relLASSO_nonrand / float(i + 1)) + "\n")
         # sys.stderr.write("overall_partial_LASSOrisk_norand" + str(partial_risk_LASSO_nonrand / float(i + 1)) + "\n"+ "\n")
-
-        sys.stderr.write("iteration completed" + str(i) + "\n")
->>>>>>> dc8ad9974a788aa3eea140c8f045dbba3073b4f7
 
 
 
