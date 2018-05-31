@@ -732,15 +732,19 @@ class optimization_intervals(object):
                                 candidate,    # candidate value
                                 nuisance,       # nuisance sufficient stats for each view
                                 translate_dirs) # points will be moved like sample * score_cov
-        
+        normalizer = self._normalizer(sample_stat,    # normal sample 
+                                      candidate,      # candidate value
+                                      nuisance,       # nuisance sufficient stats for each view
+                                      translate_dirs) # points will be moved like sample * score_cov
+
         pivot = np.mean((sample_stat + candidate <= observed_stat) * weights) / np.mean(weights)
 
         if alternative == 'twosided':
-            return 2 * min(pivot, 1 - pivot)
+            return 2 * min(pivot, 1 - pivot), normalizer
         elif alternative == 'less':
-            return pivot
+            return pivot, normalizer
         else:
-            return 1 - pivot
+            return 1 - pivot, normalizer
 
     def confidence_interval(self, linear_func, 
                             level=0.90, 
@@ -753,11 +757,16 @@ class optimization_intervals(object):
         def _rootU(gamma):
             return self.pivot(linear_func,
                               observed_stat + gamma,
-                              alternative='less') - (1 - level) / 2.
+                              alternative='less')[0] - (1 - level) / 2.
         def _rootL(gamma):
             return self.pivot(linear_func,
                               observed_stat + gamma,
-                              alternative='less') - (1 + level) / 2.
+                              alternative='less')[0] - (1 + level) / 2.
+
+        def _normalizer(gamma):
+            return self.pivot(linear_func,
+                              observed_stat + gamma,
+                              alternative='less')[1]
 
         if guess is None:
             grid_min, grid_max = -how_many_sd * np.std(sample_stat), how_many_sd * np.std(sample_stat)
@@ -790,23 +799,22 @@ class optimization_intervals(object):
                 delta *= 2
                 count += 1
             lower = bisect(_rootL, Ll, Ul)
-        DEBUG = False
+        DEBUG = True
         if DEBUG:
+            import matplotlib.pyplot as plt, glob
+            print(sample_stat.shape)
+            fs = glob.glob('pivot*.pdf')
+            fname = 'pivot%d.pdf' % (len(fs) % 100)
             print(_rootL(lower), _rootU(upper))
             print(_rootL(lower-0.01*(upper-lower)), _rootU(upper+0.01*(upper-lower)), 'perturb')
-            import matplotlib.pyplot as plt
             plt.clf()
-            X = np.linspace(lower, upper, 101)
-            plt.plot(X, [_rootL(x) + (1 + level) / 2. for x in X])
+            _range = upper - lower
+            X = np.linspace(lower - 0.5 * _range, upper + 0.5 * _range, 101)
+            plt.plot(X, [-np.log(_normalizer(x)) for x in X], 'ko-')
+            #plt.plot(X, [_rootU(x) + (1 - level) / 2. for x in X])
             plt.plot([lower, lower], [0, 1], 'k--')
             plt.plot([upper, upper], [0, 1], 'k--')
-            plt.plot([guess[0], guess[0]], [0, 1], 'r--')
-            plt.plot([guess[1], guess[1]], [0, 1], 'r--')
-            plt.plot([Ll, Ll], [0, 1], 'g--')
-            plt.plot([Ul, Ul], [0, 1], 'g--')
-            plt.plot([Lu, Lu], [0, 1], 'g--')
-            plt.plot([Uu, Uu], [0, 1], 'g--')
-            plt.savefig('pivot.pdf')
+            plt.savefig(fname)
 
         return lower + observed_stat, upper + observed_stat
 
@@ -834,7 +842,6 @@ class optimization_intervals(object):
 
         # In this function, \hat{\theta}_i will change with the Monte Carlo sample
 
-        score_sample = []
         _lognum = 0
         for i, opt_info in enumerate(self.opt_sampling_info):
             opt_sampler, opt_sample = opt_info[:2]
@@ -851,6 +858,30 @@ class optimization_intervals(object):
         _logratio -= _logratio.max()
 
         return np.exp(_logratio)
+
+    def _normalizer(self,
+                    sample_stat,
+                    candidate,
+                    nuisance,
+                    translate_dirs):
+
+        _lognum = 0
+        for i, opt_info in enumerate(self.opt_sampling_info):
+            opt_sampler, opt_sample = opt_info[:2]
+            if not isinstance(opt_sampler, affine_gaussian_sampler):
+                score_sample = np.multiply.outer(sample_stat + candidate, translate_dirs[i]) + nuisance[i][None, :] # these are now score coordinates
+                _lognum += opt_sampler.log_density(score_sample, opt_sample)
+            else:
+                _lognum += opt_sampler.log_density_ray(candidate,
+                                                       translate_dirs[i],
+                                                       nuisance[i],
+                                                       sample_stat, 
+                                                       opt_sample)
+        _logratio = _lognum - self._logden
+        _logratio -= _logratio.max()
+
+        print(np.mean(np.exp(_logratio)), np.std(np.exp(_logratio)))
+        return np.mean(np.exp(_logratio))
 
 def naive_confidence_intervals(diag_cov, observed, alpha=0.1):
     """
