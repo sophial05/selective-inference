@@ -209,9 +209,20 @@ class mixture_learner(object):
         """
 
         learning_selection, learning_T, random_algorithm = self.generate_data(B=B,
-                                                                      check_selection=check_selection)
+                                                                              check_selection=check_selection)
+
         print('prob(select): ', np.mean(learning_selection, 0))
-        conditional_laws = fit_probability(learning_T, learning_selection, **fit_args)
+        no_selection = np.mean(learning_selection, 0) == 1
+        learned_laws = fit_probability(learning_T,
+                                       learning_selection[:, ~no_selection],
+                                       **fit_args)
+        conditional_laws = []
+        for i in range(learning_selection.shape[1]):
+            if no_selection[i]:
+                print('just a constant', i, learning_selection.shape[1])
+                conditional_laws.append(lambda t: np.ones(np.asarray(t).shape[0]))
+            else:
+                conditional_laws.append(learned_laws.pop(0))
         return conditional_laws, (learning_T, learning_selection)
 
 class sparse_mixture_learner(mixture_learner):

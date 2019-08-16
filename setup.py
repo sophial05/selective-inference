@@ -108,6 +108,7 @@ def main(**extra_args):
           requires=info.REQUIRES,
           provides=info.PROVIDES,
           packages     = ['selection',
+                          'selection.learning',
                           'selection.utils',
                           'selection.truncated',
                           'selection.truncated.tests',
