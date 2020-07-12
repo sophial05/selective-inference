@@ -5,6 +5,6 @@ scipy
 mpmath
 pyinter
 statsmodels
-sklearn
+scikit-learn
 regreg
 rpy2
